@@ -7,12 +7,17 @@ import zipfile
 from io import BytesIO
 
 app = Flask(__name__)
-
-# UPDATED: Explicitly allow the React origin
-CORS(app, resources={r"/*": {"origins": "*"}})
+# Allow your specific domain
+CORS(app, resources={r"/*": {"origins": "https://telesplit.yajtech.com"}})
 
 def classify_operator(mobile):
+    # Handle empty or NaN values
+    if pd.isna(mobile) or str(mobile).strip() == "":
+        return "OTHER"
+
+    # Convert to string and remove .0 if it's a float
     mobile = str(mobile).strip().split('.')[0]
+
     ntc_regex = r"9[78][456][0-9]{7}"
     ncell_regex1 = r"98[012][0-9]{7}"
     ncell_regex2 = r"97[01][0-9]{7}"
@@ -34,32 +39,51 @@ def process_excel():
         return jsonify({"error": "No file uploaded"}), 400
 
     file = request.files['file']
-    phone_col = request.form.get('column_name', 'Mobile')
+    # Get column name and strip any extra spaces
+    phone_col = request.form.get('column_name', 'Mobile').strip()
 
     try:
-        df = pd.read_excel(file)
-        df.columns = df.columns.astype(str).str.strip()
+        # engine='openpyxl' ensures it uses the right library
+        df = pd.read_excel(file, engine='openpyxl')
+
+        # Clean the column headers (remove spaces, convert to list)
+        df.columns = [str(c).strip() for c in df.columns]
 
         if phone_col not in df.columns:
-            return jsonify({"error": f"Column '{phone_col}' not found."}), 400
+            return jsonify({
+                "error": f"Column '{phone_col}' not found. Found columns: {list(df.columns)}"
+            }), 400
 
+        # Classify
         df['Operator'] = df[phone_col].apply(classify_operator)
 
         memory_file = BytesIO()
         with zipfile.ZipFile(memory_file, 'w') as zf:
+            processed_any = False
             for op in ['NTC', 'NCELL', 'SMARTCELL', 'OTHER']:
                 subset = df[df['Operator'] == op].drop(columns=['Operator'])
                 if not subset.empty:
+                    processed_any = True
                     output = BytesIO()
                     subset.to_excel(output, index=False)
                     zf.writestr(f"{op.lower()}_numbers.xlsx", output.getvalue())
 
+            if not processed_any:
+                return jsonify({"error": "No numbers were processed. Check your file format."}), 400
+
         memory_file.seek(0)
-        return send_file(memory_file, mimetype='application/zip', as_attachment=True, download_name='split_numbers.zip')
+        return send_file(
+            memory_file,
+            mimetype='application/zip',
+            as_attachment=True,
+            download_name='split_numbers.zip'
+        )
 
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        # This will return the EXACT error message to your React frontend
+        print(f"Error occurred: {str(e)}")
+        return jsonify({"error": f"Server Error: {str(e)}"}), 500
 
 if __name__ == '__main__':
-    # It only needs to listen on 127.0.0.1 because Nginx is on the same server
+    # For Nginx proxy, 127.0.0.1 is best
     app.run(host='127.0.0.1', port=5001)
