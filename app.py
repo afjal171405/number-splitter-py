@@ -61,5 +61,4 @@ def process_excel():
         return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    # UPDATED: Changed port to 5001 to avoid AirPlay conflict
-    app.run(host='0.0.0.0', port=5001, debug=True)
+    app.run(host='0.0.0.0', port=80, debug=False)
